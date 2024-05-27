@@ -3,189 +3,125 @@
 
 #include "PerfLoggerCMake.h"
 
-using namespace std;
+void PerformanceRecorder::setCSVFileName(const std::string& filename)
+{
+    std::lock_guard<std::mutex> lock(sm_Mutex);
+    sm_CsvFileName = filename;
+}
 
-class PerformanceRecorder {
-public:
-    enum VerbLevels { VerbLevel_Low, VerbLevel_Mid, VerbLevel_High };
+PerformanceRecorder::PerformanceRecorder(const std::string& functionIdentifier, VerbLevels verbosity)
+    : m_FnID(functionIdentifier), m_VerboseLevel(verbosity) {
+    start();
+}
 
-    struct FnPerfRec {
-        std::string FnID;
-        double runtime;
-    };
+void PerformanceRecorder::start() {
+    m_Start_time = std::chrono::high_resolution_clock::now();
+    m_Stopped = false;
+}
 
-    static void setCSVFileName(const std::string& filename) {
-        std::lock_guard<std::mutex> lock(sm_Mutex);
-        sm_CsvFileName = filename;
+void PerformanceRecorder::stopAndWrite() {
+    if (m_Stopped) return;
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration = end_time - m_Start_time;
+    double execTime = duration.count();
+
+    std::lock_guard<std::mutex> lock(sm_Mutex);
+    if (sm_CsvFileName.empty()) {
+        sm_CsvFileName = "HD_PerformanceRecorder_Report_" + getTimestamp() + ".csv";
     }
 
-    PerformanceRecorder(const std::string& functionIdentifier, VerbLevels verbosity = VerbLevel_High)
-        : m_FnID(functionIdentifier), m_VerboseLevel(verbosity) {
-        start();
-    }
-
-    ~PerformanceRecorder() {
-        if (!m_Stopped) {
-            stopAndWrite();
-        }
-    }
-
-    void start() {
-        m_Start_time = std::chrono::high_resolution_clock::now();
-        m_Stopped = false;
-    }
-
-    void stopAndWrite() {
-        if (m_Stopped) return;
-
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> duration = end_time - m_Start_time;
-        double execTime = duration.count();
-
-        std::lock_guard<std::mutex> lock(sm_Mutex);
-        if (sm_CsvFileName.empty()) {
-            sm_CsvFileName = "HD_PerformanceRecorder_Report_" + getTimestamp() + ".csv";
-        }
-
-        if (m_VerboseLevel > VerbLevel_Low) {
-            // Log the execution time to the CSV file. Open file in append mode
-            std::ofstream file(sm_CsvFileName, std::ios::app);
-            if (file.is_open()) {
-                if (!sm_AnalHeader) {
-                    const std::time_t t_c = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                    file << "\nFunction performance analytics at " << std::ctime(&t_c) << ":\n";
-                    file << "Function,Start Time,End Time,Duration (sec)\n";
-                    sm_AnalHeader = true;
-                }
-                file << m_FnID << ",";
-                file << std::chrono::duration_cast<std::chrono::milliseconds>(m_Start_time.time_since_epoch()).count() << ",";
-                file << std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count() << ",";
-                file << execTime << "\n";
-                file.close();
-            }
-            else {
-                std::cerr << "Unable to open file: " << sm_CsvFileName << std::endl;
-            }
-        }
-
-        // Update statistics
-        sm_FnPerformances.push_back({ m_FnID, execTime });
-        m_Stopped = true;
-    }
-
-    // Static method to generate a summary report
-    static void generateSummary() {
-        std::lock_guard<std::mutex> lock(sm_Mutex);
+    if (m_VerboseLevel > VerbLevel_Low) {
+        // Log the execution time to the CSV file. Open file in append mode
         std::ofstream file(sm_CsvFileName, std::ios::app);
         if (file.is_open()) {
-            file << "\nFunction performance summary:\n";
-            file << "Function,Calls,Min.Exec Time,Max.Exec Time,Avg Exec.Time,Std.Dev,Sum Exec.Time\n";
-            std::map<std::string, std::vector<double>> funcExecTimes;
-
-            for (const auto& record : sm_FnPerformances) {
-                funcExecTimes[record.FnID].push_back(record.runtime);
+            if (!sm_AnalHeader) {
+                const std::time_t t_c = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                file << "\nFunction performance analytics by PerformanceRecorder at " << std::ctime(&t_c);
+                file << "Function,Start Time,End Time,Duration (sec)\n";
+                sm_AnalHeader = true;
             }
-
-            for (const auto& entry : funcExecTimes) {
-                const std::string& funcId = entry.first;
-                const std::vector<double>& times = entry.second;
-
-                int numCalls = times.size();
-                double minTime = *std::min_element(times.begin(), times.end());
-                double maxTime = *std::max_element(times.begin(), times.end());
-                double sumTime = std::accumulate(times.begin(), times.end(), 0.0);1.0;
-                double avgTime = sumTime / numCalls;
-
-                double sumSquaredDiffs = std::accumulate(times.begin(), times.end(), 0.0,
-                    [avgTime](double acc, double t) { return acc + (t - avgTime) * (t - avgTime); });
-                double stdDevTime = std::sqrt(sumSquaredDiffs / numCalls);
-
-                file << funcId << ","
-                    << numCalls << ","
-                    << minTime << ","
-                    << maxTime << ","
-                    << avgTime << ","
-                    << stdDevTime << ","
-                    << sumTime << "\n";
-            }
+            file << m_FnID << ",";
+            file << std::chrono::duration_cast<std::chrono::milliseconds>(m_Start_time.time_since_epoch()).count() << ",";
+            file << std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count() << ",";
+            file << execTime << "\n";
             file.close();
         }
+        else {
+            std::cerr << "Unable to open file: " << sm_CsvFileName << std::endl;
+        }
     }
 
-private:
-    // Static members
-    static std::string sm_CsvFileName;
-    static std::vector<FnPerfRec> sm_FnPerformances;
-    static std::mutex sm_Mutex;
-    // Static member for mutex to protect std::localtime
-    static std::mutex sm_TimeMutex;
-    static bool sm_AnalHeader;
+    // Update statistics
+    sm_FnPerformances.push_back({ m_FnID, execTime });
+    m_Stopped = true;
+}
 
-    // Instance members
-    std::chrono::high_resolution_clock::time_point m_Start_time;
-    std::string m_FnID;
-    bool m_Stopped = true;
-    VerbLevels m_VerboseLevel;
+PerformanceRecorder::~PerformanceRecorder() {
+    if (!m_Stopped) {
+        stopAndWrite();
+    }
+}
 
-    static std::string getTimestamp() {
-        auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm tm;
+void PerformanceRecorder::generateSummary()
+{
+    std::lock_guard<std::mutex> lock(sm_Mutex);
+    std::ofstream file(sm_CsvFileName, std::ios::app);
+    if (file.is_open()) {
+        const std::time_t t_c = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        file << "\nFunction performance summary at " << std::ctime(&t_c);
+        file << "Function,Calls,Min.Exec Time,Max.Exec Time,Avg Exec.Time,Std.Dev,Sum Exec.Time\n";
+        std::map<std::string, std::vector<double>> funcExecTimes;
 
-        {
-            std::lock_guard<std::mutex> lock(sm_TimeMutex);
-            tm = *std::localtime(&time);
+        for (const auto& record : sm_FnPerformances) {
+            funcExecTimes[record.FnID].push_back(record.runtime);
         }
 
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+        for (const auto& entry : funcExecTimes) {
+            const std::string& funcId = entry.first;
+            const std::vector<double>& times = entry.second;
 
-        std::ostringstream oss;
-        oss << std::put_time(&tm, "%Y-%m-%d_%H-%M.%S.") << std::setw(3) << std::setfill('0') << ms.count();
+            int numCalls = times.size();
+            double minTime = *std::min_element(times.begin(), times.end());
+            double maxTime = *std::max_element(times.begin(), times.end());
+            double sumTime = std::accumulate(times.begin(), times.end(), 0.0); 1.0;
+            double avgTime = sumTime / numCalls;
 
-        return oss.str();
-    }
+            double sumSquaredDiffs = std::accumulate(times.begin(), times.end(), 0.0,
+                [avgTime](double acc, double t) { return acc + (t - avgTime) * (t - avgTime); });
+            double stdDevTime = std::sqrt(sumSquaredDiffs / numCalls);
 
-    /*
-        std::string time2str(const std::chrono::high_resolution_clock::time_point& tp) {
-        // Convert to system time_point
-        auto system_time = std::chrono::time_point_cast<std::chrono::milliseconds>(tp);
-        auto ms = system_time.time_since_epoch() % 1000;
-
-        // Convert to time_t to get calendar time
-        std::time_t time_t = std::chrono::system_clock::to_time_t(system_time);
-
-        // Convert to tm structure for local time
-        std::tm tm;
-        {
-            std::tm* tm_ptr = std::localtime(&time_t);
-            tm = *tm_ptr;
+            file << funcId << ","
+                << numCalls << ","
+                << minTime << ","
+                << maxTime << ","
+                << avgTime << ","
+                << stdDevTime << ","
+                << sumTime << "\n";
         }
+        file.close();
+    }
+}
 
-        // Format the timestamp
-        std::ostringstream oss;
-        oss << std::put_time(&tm, "%Y.%m.%d. %H:%M:%S.") << std::setw(3) << std::setfill('0') << ms.count();
+std::string PerformanceRecorder::getTimestamp()
+{
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm tm;
 
-        return oss.str();
+    {
+        std::lock_guard<std::mutex> lock(sm_TimeMutex);
+        tm = *std::localtime(&time);
     }
 
-    static std::string time2str(std::chrono::high_resolution_clock::time_point now) {
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm tm;
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
 
-        {
-            std::lock_guard<std::mutex> lock(sm_TimeMutex);
-            tm = *std::localtime(&time);
-        }
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d_%H-%M.%S.") << std::setw(3) << std::setfill('0') << ms.count();
 
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    return oss.str();
+}
 
-        std::ostringstream oss;
-        oss << std::put_time(&tm, "%Y-%m-%d_%H-%M.%S.") << std::setw(3) << std::setfill('0') << ms.count();
-
-        return oss.str();
-    }
-   */
-};
 // Initialize static members
 std::string PerformanceRecorder::sm_CsvFileName;
 std::vector<PerformanceRecorder::FnPerfRec> PerformanceRecorder::sm_FnPerformances;
@@ -195,23 +131,26 @@ bool PerformanceRecorder::sm_AnalHeader = false;
 
 // Example functions
 void foo() {
-    //PerformanceRecorder recorder("foo");
-    PerformanceRecorder recorder("foo", PerformanceRecorder::VerbLevel_Low);
+    PerformanceRecorder recorder("foo");
+    //PerformanceRecorder recorder("foo", PerformanceRecorder::VerbLevel_Low);
     for (int i = 0; i < 1000000; ++i);  // Simulate work
 }
 
 void blah() {
     PerformanceRecorder recorder("blah");
+    //PerformanceRecorder recorder("blah", PerformanceRecorder::VerbLevel_Low);
     for (int i = 0; i < 2000000; ++i);  // Simulate work
 }
 
 void bar() {
     PerformanceRecorder recorder("bar");
+    //PerformanceRecorder recorder("bar", PerformanceRecorder::VerbLevel_Low);
     for (int i = 0; i < 3000000; ++i);  // Simulate work
 }
 
 void baz() {
     PerformanceRecorder recorder("baz");
+    //PerformanceRecorder recorder("baz", PerformanceRecorder::VerbLevel_Low);
     for (int i = 0; i < 4000000; ++i);  // Simulate work
 }
 
