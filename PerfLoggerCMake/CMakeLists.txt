@@ -3,7 +3,7 @@
 #
 
 # Add source to this project's executable.
-add_executable (PerfLoggerCMake "PerfLoggerCMake.cpp" "PerfLoggerCMake.h")
+add_executable (PerfLoggerCMake "PerfLoggerCMake.cpp"  "performance_recorder.cpp" "performance_recorder.h")
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET PerfLoggerCMake PROPERTY CXX_STANDARD 20)
